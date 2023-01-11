@@ -1,4 +1,4 @@
-const { Client, MessageMedia, LocalAuth } = require('whatsapp-web.js');
+const { Client, MessageMedia, LocalAuth, RemoteAuth } = require('whatsapp-web.js');
 const express = require('express');
 const socketIO = require('socket.io');
 const qrcode = require('qrcode');
@@ -9,6 +9,9 @@ const { phoneNumberFormatter } = require('./helpers/formatter');
 const fileUpload = require('express-fileupload');
 const port = process.env.PORT || 8000;
 const vuri = require('valid-url');
+var cron = require('node-cron');
+const { MongoStore } = require('wwebjs-mongo');
+const mongoose = require('mongoose');
 
 const app = express();
 const server = http.createServer(app);
@@ -74,8 +77,11 @@ const getSessionsFile = function () {
   return JSON.parse(fs.readFileSync(SESSIONS_FILE));
 }
 
-const createSession = function (id, description) {
+const createSession = async function (id, description) {
   console.log('Creating session: ' + id);
+
+  await mongoose.connect("mongodb://localhost:27017/appms");
+  const store = new MongoStore({ mongoose });
   const client = new Client({
     restartOnAuthFail: true,
     puppeteer: {
@@ -90,13 +96,18 @@ const createSession = function (id, description) {
         '--single-process', // <- this one doesn't works in Windows
         '--disable-gpu'
       ],
-      //executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-      executablePath: "/usr/bin/google-chrome",
+      executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      //executablePath: "/usr/bin/google-chrome",
     },
-
-    authStrategy: new LocalAuth({
-      clientId: id
+    authStrategy: new RemoteAuth({
+      store,
+      backupSyncIntervalMs: 300000, // in ms, minimum interval starts at 60000
+      clientId: id, // I would say it's required
+      //dataPath: './your_sessions_path/', // optional
     })
+    // authStrategy: new LocalAuth({
+    //   clientId: id
+    // })
   });
 
   client.initialize();
@@ -129,6 +140,7 @@ const createSession = function (id, description) {
   });
 
   client.on('disconnected', (reason) => {
+    console.log(id);
     io.emit('message', { id: id, text: 'Whatsapp is disconnected!' });
     client.destroy();
     client.initialize();
@@ -136,10 +148,11 @@ const createSession = function (id, description) {
     // Menghapus pada file sessions
     const savedSessions = getSessionsFile();
     const sessionIndex = savedSessions.findIndex(sess => sess.id == id);
-    savedSessions.splice(sessionIndex, 1);
-    setSessionsFile(savedSessions);
 
-    io.emit('remove-session', id);
+    var obj = savedSessions[sessionIndex];
+    savedSessions.splice(sessionIndex, 1);
+    //setSessionsFile(savedSessions); 
+    //io.emit('remove-session', id);
   });
 
   // Tambahkan client ke sessions
@@ -200,72 +213,115 @@ io.on('connection', function (socket) {
   });
 });
 
+var inc = 0;
+cron.schedule('*/2 * * * * *', async () => {
+  inc = inc + 1;
+
+  console.log(new Date(new Date() - 3600 * 1000 * 3).toISOString());
+  console.log(inc)
+  if (inc > 30) { 
+    const client = sessions.find(sess => sess.id == 'myhij')?.client;
+    if (!client) {
+      return;
+    }
+
+    var number = '916238611728';
+    number = phoneNumberFormatter(number);
+    const isRegisteredNumber = await client.isRegisteredUser(number);
+
+    if (!isRegisteredNumber) {
+      return;
+    }
+    client.sendMessage(number, new Date(new Date() - 3600 * 1000 * 3).toISOString()).then(response => {
+
+    }).catch(err => {
+
+    });
+  }
+
+
+});
+
+
+
 // Send message
 app.post('/send-message', async (req, res) => {
-  console.log(req.body);  
-  try{
-  const sender = req.body.sender;
-  const number = phoneNumberFormatter(req.body.number);
-  const message = req.body.message;
-  const type = req.body.type;
-  let image = req.body.image;
+  console.log(req.body);
+  try {
+    const sender = req.body.sender;
+    const number = phoneNumberFormatter(req.body.number);
+    const message = req.body.message;
+    const type = req.body.type;
+    let image = req.body.image;
 
-  const client = sessions.find(sess => sess.id == sender)?.client;
-  console.log(client);
-  // Make sure the sender is exists & ready
-  if (!client) {
-    return res.status(422).json({
-      status: false,
-      message: `The sender: ${sender} is not found!`
-    })
-  }
+    const client = sessions.find(sess => sess.id == sender)?.client;
 
-  /**
-   * Check if the number is already registered
-   * Copied from app.js
-   * 
-   * Please check app.js for more validations example
-   * You can add the same here!
-   */
-  const isRegisteredNumber = await client.isRegisteredUser(number);
-
-  if (!isRegisteredNumber) {
-    return res.status(422).json({
-      status: false,
-      message: 'The number is not registered'
-    });
-  }
-  if (vuri.isWebUri(image)) {
-    const media = await MessageMedia.fromUrl(image);
-    client.sendMessage(number, media, { caption: message || '' }).then(response => {
-      res.status(200).json({
-        status: true,
-        response: response
-      });
-    }).catch(err => {
-      res.status(200).json({
+    // Make sure the sender is exists & ready
+    if (!client) {
+      return res.status(422).json({
         status: false,
-        response: err
-      });
-    });
+        message: `The sender: ${sender} is not found!`
+      })
 
-  }
-  else {
-    client.sendMessage(number, message).then(response => {
-      res.status(200).json({
-        status: true,
-        response: response
-      });
-    }).catch(err => {
-      res.status(200).json({
+    }
+
+    /**
+     * Check if the number is already registered
+     * Copied from app.js
+     * 
+     * Please check app.js for more validations example
+     * You can add the same here!
+     */
+    const isRegisteredNumber = await client.isRegisteredUser(number);
+
+    if (!isRegisteredNumber) {
+      return res.status(422).json({
         status: false,
-        response: err
+        message: 'The number is not registered'
       });
-    });
+    }
+    if (vuri.isWebUri(image)) {
+      const templateButtons = [
+        { index: 1, urlButton: { displayText: '⭐ Star Baileys on GitHub!', url: 'https://github.com/adiwajshing/Baileys' } },
+        { index: 2, callButton: { displayText: 'Call me!', phoneNumber: '+1 (234) 5678-901' } },
+        { index: 3, quickReplyButton: { displayText: 'This is a reply, just like normal buttons!', id: 'id-like-buttons-message' } },
+      ]
+
+      const templateMessage = {
+        text: "Hi it's a template message",
+        footer: 'Hello World',
+        templateButtons: templateButtons
+      }
+
+      const media = await MessageMedia.fromUrl(image);
+      client.sendMessage(number, media, { caption: message || '' }).then(response => {
+        res.status(200).json({
+          status: true,
+          response: response
+        });
+      }).catch(err => {
+        res.status(200).json({
+          status: false,
+          response: err
+        });
+      });
+
+    }
+    else {
+      client.sendMessage(number, message).then(response => {
+        res.status(200).json({
+          status: true,
+          response: response
+        });
+      }).catch(err => {
+        res.status(200).json({
+          status: false,
+          response: err
+        });
+      });
+    }
   }
-  }
-  catch (e)
-  {
+  catch (e) {
     res.status(200).json({
       status: false,
       response: e
