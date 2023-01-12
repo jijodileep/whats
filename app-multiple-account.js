@@ -12,6 +12,14 @@ const vuri = require('valid-url');
 var cron = require('node-cron');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
+var mysql = require('mysql');
+
+var connection = mysql.createConnection({
+  host: 'localhost',
+  user: 'root',
+  password: 'dimind@8891',
+  database: 'whatsapp'
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -216,32 +224,85 @@ io.on('connection', function (socket) {
 var inc = 0;
 cron.schedule('*/2 * * * * *', async () => {
   inc = inc + 1;
+  console.log(inc);
+  if (inc > 60) {
+    connection.query('SELECT b.*,a.msg ,a.link FROM msg AS a INNER JOIN msg_send AS b ON a.id = b.msg_id WHERE b.`status` =0 limit 1', function (error, results, fields) {
+      if (error) {
+        return;
+      } else {
+        results.forEach(async (row) => {
 
-  console.log(new Date(new Date() - 3600 * 1000 * 3).toISOString());
-  console.log(inc)
-  if (inc > 30) { 
-    const client = sessions.find(sess => sess.id == 'myhij')?.client;
-    if (!client) {
-      return;
-    }
+          const client = sessions.find(sess => sess.id == 'myhij')?.client;
+          if (!client) {
+            return;
+          }
 
-    var number = '916238611728';
-    number = phoneNumberFormatter(number);
-    const isRegisteredNumber = await client.isRegisteredUser(number);
+          var number = phoneNumberFormatter(row.number);
 
-    if (!isRegisteredNumber) {
-      return;
-    }
-    client.sendMessage(number, new Date(new Date() - 3600 * 1000 * 3).toISOString()).then(response => {
+          const isRegisteredNumber = await client.isRegisteredUser(number);
 
-    }).catch(err => {
+          if (!isRegisteredNumber) {
+            return;
+          }
+          if (vuri.isWebUri(row.link)) {
+            const media = await MessageMedia.fromUrl(row.link);
+            client.sendMessage(number, media, { caption: row.msg || '' }).then(async (response) => {
+              var msry = " update  msg_send  set status =1 where id=" + row.id;
+              await connection.query(msry);
+
+            }).catch(err => {
+            });
+          }
+          else {
+            client.sendMessage(number, row.msg).then(async (response) => {
+              var msry = " update  msg_send  set status =1 where id=" + row.id;
+              await connection.query(msry);
+
+            }).catch(err => {
+
+            });
+          }
+
+
+        })
+      }
 
     });
+
+
+
+
+
   }
 
 
 });
+app.post('/schedule', async (req, res) => {
+  console.log(req.body);
+  try {
+    var query = "insert into msg (msg,link,contact) values ('" + req.body.msg + "','" + req.body.link + "','" + req.body.contact + "')"
+    connection.query(query, function (error, results, fields) {
+      if (error) throw error;
+      console.log(results);
+      var listcontacts = req.body.contact.split(',');
+      listcontacts.forEach(async (num) => {
+        var qry = "insert into msg_send (msg_id,number,status) values ('" + results.insertId + "','" + num + "',0)";
+        await connection.query(qry);
+      })
+      res.status(200).json({
+        status: true,
+        response: results
+      });
+    });
 
+  }
+  catch (e) {
+    res.status(200).json({
+      status: false,
+      response: e
+    });
+  }
+});
 
 
 // Send message
@@ -281,18 +342,6 @@ app.post('/send-message', async (req, res) => {
       });
     }
     if (vuri.isWebUri(image)) {
-      const templateButtons = [
-        { index: 1, urlButton: { displayText: '⭐ Star Baileys on GitHub!', url: 'https://github.com/adiwajshing/Baileys' } },
-        { index: 2, callButton: { displayText: 'Call me!', phoneNumber: '+1 (234) 5678-901' } },
-        { index: 3, quickReplyButton: { displayText: 'This is a reply, just like normal buttons!', id: 'id-like-buttons-message' } },
-      ]
-
-      const templateMessage = {
-        text: "Hi it's a template message",
-        footer: 'Hello World',
-        templateButtons: templateButtons
-      }
-
       const media = await MessageMedia.fromUrl(image);
       client.sendMessage(number, media, { caption: message || '' }).then(response => {
         res.status(200).json({
